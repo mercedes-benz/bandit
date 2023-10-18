@@ -1,19 +1,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
+
+# pylint: disable=c-extension-no-member
+
 r"""
 =============
 Sarif Formatter
 =============
 
-This formatter outputs the issues as Sarif.
+This formatter outputs the security report in the
+Static Analysis Results Interchange Format (SARIF) .
 
 """
+import datetime
+import json
 import logging
-import sys, os, uuid, datetime, json
+import os
+import sys
+import uuid
 
 from lxml import etree
 
-
+import bandit
 from bandit.core import docs_utils
 
 LOG = logging.getLogger(__name__)
@@ -25,6 +33,7 @@ SARIF_TRANSFORMATION_FILE = os.path.join(SCRIPT_PATH, "sarif", "sarif.xsl")
 
 rules = []
 
+
 def report(manager, fileobj, sev_level, conf_level, lines=-1):
     """Prints issues in Sarif format using the XSLT stylesheet in sarif/sarif.xsl
 
@@ -34,13 +43,14 @@ def report(manager, fileobj, sev_level, conf_level, lines=-1):
     :param conf_level: Filtering confidence level
     :param lines: Number of lines to report, -1 for all
     """
-    global rules
     issues = manager.get_issue_list(sev_level=sev_level, conf_level=conf_level)
-    root = etree.Element("testsuite", name="Bandit", tests=str(len(issues)))
+    root = etree.Element(
+        "testsuite", name="Bandit", tests=str(len(issues)), cwe_guid=str(uuid.uuid4())
+    )
     for issue in issues:
         id = str(issue.test_id)
-        code = issue.as_dict()['code']
-        if not id in rules:
+        code = issue.as_dict()["code"]
+        if id not in rules:
             rules.append(id)
         testcase = etree.SubElement(
             root,
@@ -54,7 +64,8 @@ def report(manager, fileobj, sev_level, conf_level, lines=-1):
             cwe_link=str(issue.cwe.link),
             filename=str(issue.fname),
             location=str(issue.lineno),
-            code=code
+            code=code,
+            taxa_guid=str(uuid.uuid4()),
         )
 
         etree.SubElement(
@@ -69,11 +80,8 @@ def report(manager, fileobj, sev_level, conf_level, lines=-1):
     # so we just attach this data to the root element
     # and replace the single quotes with double quotes.
 
-    metrics = str(manager.metrics.data).replace("'",'"')
-    etree.SubElement(
-        root,
-        "metrics"
-        ).text = metrics
+    metrics = str(manager.metrics.data).replace("'", '"')
+    etree.SubElement(root, "metrics").text = metrics
 
     tree = etree.ElementTree(root)
 
@@ -84,7 +92,7 @@ def report(manager, fileobj, sev_level, conf_level, lines=-1):
         fileobj = open(fileobj.name, "w", encoding="utf-8")
 
     with fileobj:
-        # We register namespace functions that can be called inside the XSLT transformation
+        # Register namespace functions that can be called inside the XSLT transformation
         register_stylesheet_functions()
         # Read the XSLT stylesheet
         xsl = etree.XML(open(SARIF_TRANSFORMATION_FILE, "r", encoding="utf-8").read())
@@ -93,8 +101,8 @@ def report(manager, fileobj, sev_level, conf_level, lines=-1):
         result = transform(tree)
         if INDENT:
             # Load into python dict and pretty print when writing back to JSON
-            jsn = json.loads(result.getroot().text)
-            fileobj.write(json.dumps(jsn, indent=2))
+            json_text = json.loads(result.getroot().text)
+            fileobj.write(json.dumps(json_text, indent=2))
         else:
             fileobj.write(result.getroot().text)
 
@@ -106,13 +114,20 @@ def register_stylesheet_functions():
     """Make these functions available in the XSLT stylesheet."""
     namespace = etree.FunctionNamespace("local://bandit-sarif")
     namespace["cwe-data-xml"] = get_cwe_data_xml
-    namespace["uuid"] = get_uuid
     namespace["endtime-utc"] = endtime_utc
     namespace["get-vulnerable-code-line"] = get_vulnerable_code_line
     namespace["get-all-code-lines"] = get_all_code_lines
     namespace["format-description"] = format_description
     namespace["count-lines"] = count_lines
     namespace["get-rule-index"] = get_rule_index
+    namespace["get-bandit-version"] = get_bandit_version
+    namespace["get-information-uri"] = get_information_uri
+    namespace["get-download-uri"] = get_download_uri
+    namespace["get-organization-name"] = get_organization_name
+    namespace["get-organization-description"] = get_organization_description
+    namespace["get-sarif-schema-version"] = get_sarif_schema_version
+    namespace["get-sarif-schema-location"] = get_sarif_schema_location
+    namespace["get-bandit-information-uri"] = get_bandit_information_uri
 
 
 def get_cwe_data_xml(context):
@@ -120,43 +135,87 @@ def get_cwe_data_xml(context):
     return CWE_DATA_XML
 
 
-def get_uuid(context):
-    """Called by the XSLT stylesheet and returns a unique ID."""
-    return str(uuid.uuid4())
+def get_information_uri(context):
+    """Called by the XSLT stylesheet and returns information uri of the CWE catalog."""
+    return "https://cwe.mitre.org/data/published/cwe_v4.12.pdf"
+
+
+def get_download_uri(context):
+    """Called by the XSLT stylesheet and returns the download uri of the CWE catalog."""
+    return "https://cwe.mitre.org/data/xml/cwec_v4.12.xml.zip"
+
+
+def get_organization_name(context):
+    """Called by the XSLT stylesheet and returns the MITRE organization name."""
+    return "MITRE"
+
+
+def get_organization_description(context):
+    """Called by the XSLT stylesheet and returns the organization short description."""
+    return "The MITRE Common Weakness Enumeration"
+
+
+def get_sarif_schema_version(context):
+    """Called by the XSLT stylesheet and returns the Sarif JSON schema version."""
+    return "2.1.0"
+
+
+def get_sarif_schema_location(context):
+    """Called by the XSLT stylesheet and returns the Sarif JSON schema location."""
+    return "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"
+
+
+def get_bandit_information_uri(context):
+    """Called by the XSLT stylesheet and returns the Bandit GitHub uri."""
+    return "https://github.com/PyCQA/bandit/tree/main"
 
 
 def endtime_utc(context):
-    """Called by the XSLT stylesheet and returns end time utc."""
+    """Called by the XSLT stylesheet and returns end time in UTC format."""
     return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def get_vulnerable_code_line(context, code):
     """Called by the XSLT stylesheet and return the vulnerable line of the code block."""
-    # code block does always consist of three lines: the vulnerable line is in the middle
-    vulnerable_line = code[0].split('\n')[1]
-    # remove line number
-    vulnerable_line_content = vulnerable_line.split(' ',1)[1]
+    # normally code block consist of minimum three lines: the vulnerable line is second
+    # but e.g. in a test case the code block may be mocked shorter or empty
+    lines = code[0].split("\n")
+    if len(lines) > 1:
+        vulnerable_line = lines[1]
+    else:
+        vulnerable_line = lines[0]
+    # remove line number if exists. line number is separated by whitespace
+    line_split = vulnerable_line.split(" ", 1)
+    if len(line_split) > 1:
+        vulnerable_line_content = line_split[1]
+    else:
+        vulnerable_line_content = line_split[0]
     # remove leading and trailing quotes, escape for json and return
-    return json.dumps(vulnerable_line_content)[1:-1]+'\\n'
+    return json.dumps(vulnerable_line_content)[1:-1]
 
 
 def get_all_code_lines(context, code):
     """Called by the XSLT stylesheet and return all the lines of the code block."""
     # remove line numbers, remove leading and trailing quotes and return
-    codelines = [line.split(' ',1)[1] for line in code[0].split('\n') if len(line) > 1]
-    return "\\n".join([json.dumps(line)[1:-1] for line in codelines])+'\\n'
+    codelines = [line.split(" ", 1)[1] for line in code[0].split("\n") if len(line) > 1]
+    return "\\n".join([json.dumps(line)[1:-1] for line in codelines])
 
 
 def format_description(context, description):
     """Called by the XSLT stylesheet and fixes the cwe:Description text block."""
-    return description[0].text.replace('\n','\\n')
+    return description[0].text.replace("\n", "\\n")
 
 
 def count_lines(context, code):
     """Called by the XSLT stylesheet and count lines of code block."""
-    return len(code.split('\n'))
+    return len(code.split("\n"))
 
 
 def get_rule_index(context, rule_id):
     """Called by the XSLT stylesheet and get the index of the rule in the rules array."""
     return rules.index(rule_id[0])
+
+
+def get_bandit_version(context):
+    """Called by the XSLT stylesheet and get the version number of Bandit."""
+    return bandit.__version__

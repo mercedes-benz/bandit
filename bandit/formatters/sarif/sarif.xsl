@@ -13,7 +13,7 @@
      into the Sarif JSON format. The XML structure is taken from the XML formatter plugin,
      but PCDATA text is put into XML attributes for easier processing.
 
-     XSLT is used because the Mitre CWE Common Weakness enumeration is also read as an XML file
+     XSLT is used because the official MITRE Common Weakness Enumeration (CWE) is available as XML file
      (cwec_v4.12.xml) in one go into the XSLT stylesheet. The lookup of CWE elements can be
      performed very easily using XPATH selection, e.g.
 
@@ -26,7 +26,7 @@
             - @json = { 'property' | 'anonymous-object' | 'named-object' | 'named-list' }
         denotes if the XML element will be converted to a JSON property, list or object in the second step.
 
-     2. Processing Step: The XML structure will be converted to JSON. It will be appended to the root output tree
+     2. Processing step: The XML structure will be converted to JSON. It will be appended to the root output tree
         as one single text node. (It appears that the lxml XSLT library does not support for <xsl:output method="text"/>)
 
 -->
@@ -38,7 +38,7 @@
                 xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
 
     <xsl:variable name="cwe-data" select="document(concat('file://',bandit-sarif:cwe-data-xml()))"/>
-    <xsl:variable name="taxonomy-guid" select="bandit-sarif:uuid()"/>
+    <xsl:variable name="taxonomy-guid" select="/testsuite/@cwe_guid"/>
 
     <!-- start template -->
 
@@ -68,11 +68,17 @@
                         <xsl:with-param name="type">tool</xsl:with-param>
                     </xsl:apply-templates>
                 </rules>
-                <version json="property">1.7.5</version>
-                <informationUri json="property">https://github.com/PyCQA/bandit/tree/main</informationUri>
+                <version json="property">
+                    <xsl:value-of select="bandit-sarif:get-bandit-version()"/>
+                </version>
+                <informationUri json="property">
+                    <xsl:value-of select="bandit-sarif:get-bandit-information-uri()"/>
+                </informationUri>
                 <supportedTaxonomies json="named-list">
                     <supportedTaxonomy json="anonymous-object">
-                        <name json="property">CWE</name>
+                        <name json="property">
+                            <xsl:value-of select="$cwe-data/cwe:Weakness_Catalog/@Name"/>
+                        </name>
                         <guid json="property">
                             <xsl:value-of select="$taxonomy-guid"/>
                         </guid>
@@ -110,17 +116,31 @@
     <xsl:template name="taxonomies">
         <taxonomies json="named-list">
             <taxonomy json="anonymous-object">
-                <name json="property">CWE</name>
-                <version json="property">4.12</version>
-                <releaseDateUtc json="property">2023-06-29</releaseDateUtc>
+                <name json="property">
+                    <xsl:value-of select="$cwe-data/cwe:Weakness_Catalog/@Name"/>
+                </name>
+                <version json="property">
+                    <xsl:value-of select="$cwe-data/cwe:Weakness_Catalog/@Version"/>
+                </version>
+                <releaseDateUtc json="property">
+                    <xsl:value-of select="$cwe-data/cwe:Weakness_Catalog/@Date"/>
+                </releaseDateUtc>
                 <guid json="property">
                     <xsl:value-of select="$taxonomy-guid"/>
                 </guid>
-                <informationUri json="property">https://cwe.mitre.org/data/published/cwe_v4.12.pdf</informationUri>
-                <downloadUri json="property">https://cwe.mitre.org/data/xml/cwec_v4.12.xml.zip</downloadUri>
-                <organization json="property">MITRE</organization>
+                <informationUri json="property">
+                    <xsl:value-of select="bandit-sarif:get-information-uri()"/>
+                </informationUri>
+                <downloadUri json="property">
+                    <xsl:value-of select="bandit-sarif:get-download-uri()"/>
+                </downloadUri>
+                <organization json="property">
+                    <xsl:value-of select="bandit-sarif:get-organization-name()"/>
+                </organization>
                 <shortDescription json="named-object">
-                    <text json="property">The MITRE Common Weakness Enumeration</text>
+                    <text json="property">
+                        <xsl:value-of select="bandit-sarif:get-organization-description()"/>
+                    </text>
                 </shortDescription>
                 <taxa json="named-list">
                     <xsl:apply-templates select="testcase[not(@cwe=preceding-sibling::*/@cwe)]">
@@ -142,8 +162,12 @@
                     <xsl:call-template name="taxonomies"/>
                 </run>
             </runs>
-            <version json="property">2.1.0</version>
-            <schema>https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json</schema>
+            <version json="property">
+                <xsl:value-of select="bandit-sarif:get-sarif-schema-version()"/>
+            </version>
+            <schema>
+                <xsl:value-of select="bandit-sarif:get-sarif-schema-location()"/>
+            </schema>
         </sarif-report>
     </xsl:template>
 
@@ -202,7 +226,7 @@
                 <xsl:value-of select="$cwe-id"/>
             </id>
             <guid json="property">
-                <xsl:value-of select="$taxonomy-guid"/>
+                <xsl:value-of select="@taxa_guid"/>
             </guid>
             <name json="property">
                 <xsl:value-of select="$cwe-finding/@Name"/>
@@ -315,7 +339,7 @@
 
     <xsl:template match="testcase">
         <xsl:param name="type"/>
-        <xsl:variable name="taxa-guid" select="bandit-sarif:uuid()"/>
+        <xsl:variable name="taxa-guid" select="@taxa_guid"/>
         <xsl:choose>
             <xsl:when test="$type='tool'">
                 <xsl:call-template name="result-in-tool">
@@ -334,7 +358,10 @@
     </xsl:template>
 
     <!-- second processing step: convert Sarif like XML structure to JSON -->
-    <!-- usually you would not need to modify these rules -->
+
+    <!-- if you update the JSON elements above due to schema changes you  -->
+    <!-- typically would not need to touch the lines below since these    -->
+    <!-- rules implement a rather generic XML to JSON mapping.            -->
 
     <xsl:template match="*[@json='anonymous-object']" mode="post">
         <xsl:text>{</xsl:text>
@@ -395,6 +422,3 @@
     </xsl:template>
 
 </xsl:stylesheet>
-
-
-
